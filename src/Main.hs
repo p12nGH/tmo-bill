@@ -1,6 +1,6 @@
 import Text.Parsing.Report
-import Control.Monad (forM_)
-import Data.Maybe (catMaybes)
+import Control.Monad (forM_, replicateM_)
+import Data.Maybe (fromMaybe)
 import Text.Printf
 import Debug.Trace
 -- 
@@ -17,37 +17,32 @@ dollarAmount s = d * 100 + c where
 
 data LineCharges = LineCharges {
     number :: String,
-    total :: DollarAmount,
-    accountCharges :: DollarAmount,
-    installments :: DollarAmount
+    accountCharges :: DollarAmount
 } deriving (Show)
 
 find = skipUntil . startsWith
-findExact s = skipUntil $ predicate $ (==) s
-phoneNumber = find "(" *> currentLine
-getAmount s = find s *> (dollarAmount <$> currentLine)
-getTotal = getAmount "Total: $"
 
-equipment = findExact "Equipment" *> getAmount "Subtotal"
-plan = find "AAL SC N.America UNL" *> getAmount "$"
+l4 = reverse . take 4 . reverse
 
-line = (,) <$> phoneNumber <* find "Plan: SC N.America UnlTT" <*> getTotal
+phoneNumber = l4 <$> (find "(" *> currentLine)
+getDollars = find "$" *> (dollarAmount <$> currentLine)
 
-lineAcc = do
-    ((n, a), p) <- within' line $ plan 
-    return $ LineCharges n a p 0
+billPeriod = find "Bill period" *> find "Account"
+             *> currentLine *> currentLine *> currentLine
 
-lineAccInstallments = do
-    ((n, a), (p, e)) <- within' line $ (,) <$> plan <*> equipment 
-    return $ LineCharges n a p e
+lastDollars = snd <$> (within' (find "(") $ last <$> many getDollars)
 
-lineInstallments = do
-    ((n, a), e) <- within' line $ equipment 
-    return $ LineCharges n a 0 e
+line = LineCharges <$> phoneNumber <* currentLine <* startsWith "Voice" <*> lastDollars
 
-lineNoAcc = do
-    (n, a) <- line
-    return $ LineCharges n a 0 0
+withinN :: Int -> Parser a -> Parser a
+withinN n p = snd <$> (within' (replicateM_ n currentLine) (p))
+
+accChargeLine = (,) <$> phoneNumber <*> withinN 4 getDollars
+
+accCharges = do
+    find "VOICE LINES"
+    (_, cs) <- within' (find "CONNECTED DEVICES") $ (many $ skipUntil $ accChargeLine)
+    pure cs
 
 fairSplit :: Int -> Int -> [Int]
 fairSplit a n = f e r n where
@@ -57,28 +52,34 @@ fairSplit a n = f e r n where
     f e r n = (e + 1) : (f e (r - 1) (n - 1)) 
 
 main = do
-    (Just (bill_dates, acc_total, r)) <- processStdIn $ do
-        (,,) <$> (find "Bill close date" *> currentLine *> currentLine)
-             <*> getTotal
-             <*> (many $ skipUntil $ choice [lineAccInstallments, lineInstallments, lineAcc, lineNoAcc])
-    putStrLn bill_dates
-    print acc_total
-    forM_ r $ \a -> print $ total a
-    forM_ r print
+    Just (bill, sharedCharges, lines, ac, total) <- processStdIn $ do
+        bill <- billPeriod
+        sharedCharges <- find "THIS BILL SUMMARY" *> find "-" *> getDollars
+        (_, lines) <- within' (find "DETAILED CHARGES") (many $ skipUntil $ line)
+        ac <- accCharges
+        total <- find "Amount enclosed" *> getDollars
+        pure (bill, sharedCharges, lines, ac, total)
+
+    putStrLn bill
+    putStrLn $ "Total: " ++ (printDollarAmount total)
+    
+    let
+        lineCharges = sum $ map snd ac
+        
+        lineChargesAdjs l = fromMaybe 0 $ lookup l ac
+        perLine = fairSplit (sharedCharges + lineCharges) $ length lines
+        
+    forM_ (zip perLine lines) $ \(p, LineCharges n c) ->
+        putStrLn $ n ++ " " ++ (printDollarAmount $ p + c - (lineChargesAdjs n))
 
     let
-        acc_charges = acc_total + (sum $ map accountCharges r)
-        per_line = fairSplit acc_charges $ length r
+        f (p, LineCharges n c) = (l4 n, p + c - (lineChargesAdjs n))
 
-        d = map f (zip per_line r) where
-            f (pl, (LineCharges n t a i)) = (n, t - a - i + pl)
-        is = filter ((<) 0) $ map installments r
-    forM_ d $ \(n, a) -> putStrLn $ n ++ " " ++ (printDollarAmount a)
-    forM_ is $ \i -> putStrLn $ "      installm " ++ (printDollarAmount i)
-{-
+        m = [(2, "2305"), (3, "1991"), (6, "4681"), (5, "9507")]
+        
+        x c =
+            fromMaybe "-" $ do
+                n <- lookup c m
+                printDollarAmount <$> (lookup n $ map f (zip perLine lines))
 
-    let acc = sum $ catMaybes $ map (\(Line _ _ a) -> a) r
-    let shared = (acc_total + acc) / (fromIntegral $ length r)
-    forM_ r $ \(Line number subtotal acc_charges) -> do
-        putStrLn $ number ++ (show (subtotal + shared))
--}
+    putStrLn $ unwords $ map x [0 .. 7]
