@@ -1,11 +1,11 @@
-{ mkDerivation, base, stdenv
+{ mkDerivation, base, lib
 , nixpkgs ? import <nixpkgs> {} }:
 let
   report-parser-github = nixpkgs.fetchFromGitHub {
     owner = "p12nGH";
     repo = "report-parser";
-    rev = "280a882447b1ceb101e1f226033cae50c733d9cb";
-    sha256 = "0g88d3x7198zvi2gl196mik1fr31glawqm0dh4d6fji06r35aina";
+    rev = "476c611758dd1e7d9bef7e9e30bbe240479d42c0";
+    sha256 = "01g6yaax52qcck2hw5xpi56rz0parbbwfgrd3fl6nq5s0shll7yp";
   };
   report-parser = nixpkgs.haskellPackages.callPackage "${report-parser-github}/report-parser.nix" {};
 in
@@ -17,5 +17,5 @@ in
     isExecutable = true;
     executableHaskellDepends = [ base report-parser ];
     description = "Utility for parsing T-Mobile PDF bills";
-    license = stdenv.lib.licenses.bsd3;
+    license = lib.licenses.bsd3;
   }
